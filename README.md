@@ -92,7 +92,10 @@ First, we need to give power to everything on our breadboard:
     -> **ESP32C3 Dev Module** for ESP32-C3
 5. Go to `Tools > Port` and select the port labeled something like:
    - `/dev/ttyUSB0` or `usbserial-####`
-6. Recommended settings:
+6. Go to  `Tools > Manage Libraries` and install libraries:
+   - ArduinoJson by Benoit Blanchon (https://arduinojson.org/)
+   - WiFiManager by tzapu (https://github.com/tzapu/WiFiManager)
+7. Recommended settings:
    - Flash Size: 4MB
    - Upload Speed: 115200
    - Erase Flash: "All Flash Contents" (only if needed)
