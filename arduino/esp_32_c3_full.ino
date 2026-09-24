@@ -16,6 +16,14 @@ String server_url = "https://robot-server-782703035576.europe-west1.run.app";
 String upload_url = server_url + "/upload";
 
 WiFiClientSecure testClient;
+WiFiClient plainClient;
+bool useHttps = server_url.startsWith("https://");
+
+// Local Flask dev server only speaks plain HTTP, so pick the right client
+// based on the server_url scheme instead of always doing a TLS handshake.
+WiFiClient& getHttpClient() {
+  return useHttps ? (WiFiClient&)testClient : plainClient;
+}
 
 // Pin definitions
 #define BUTTON_PIN 3
@@ -306,7 +314,7 @@ void sendAudioToServer(int actual_data_size) {
   // Test server connectivity first
   Serial.println("🔍 Testing server connectivity...");
   HTTPClient testHttp;
-  testHttp.begin(testClient, server_url + "/health");
+  testHttp.begin(getHttpClient(), server_url + "/health");
   testHttp.setTimeout(10000);
   
   int testResponse = testHttp.GET();
@@ -330,15 +338,15 @@ void sendAudioToServer(int actual_data_size) {
   HTTPClient http;
   http.setTimeout(40000);
   
-  // Add debugging for HTTPS connection
-  Serial.println("🔗 Attempting HTTPS connection...");
-  if (!http.begin(testClient, server_url + "/upload")) {
-    Serial.println("❌ Failed to begin HTTPS connection");
+  // Add debugging for the connection
+  Serial.println(useHttps ? "🔗 Attempting HTTPS connection..." : "🔗 Attempting HTTP connection...");
+  if (!http.begin(getHttpClient(), server_url + "/upload")) {
+    Serial.println("❌ Failed to begin connection");
     return;
   }
-  
+
   http.addHeader("Content-Type", "multipart/form-data; boundary=----WebKitFormBoundary");
-  Serial.println("✅ HTTPS connection established");
+  Serial.println("✅ Connection established");
 
   String header = "------WebKitFormBoundary\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n";
   String footer = "\r\n------WebKitFormBoundary--\r\n";
@@ -463,13 +471,13 @@ void playAudioFromURL(String url) {
   
   HTTPClient http;
   
-  if (!http.begin(testClient, url)) {
-    Serial.println("❌ Failed to begin audio HTTPS connection");
+  if (!http.begin(getHttpClient(), url)) {
+    Serial.println("❌ Failed to begin audio connection");
     return;
   }
-  
+
   http.setTimeout(20000); // Shorter timeout for audio download
-  Serial.println("✅ Audio HTTPS connection established, making GET request...");
+  Serial.println("✅ Audio connection established, making GET request...");
   
   int httpCode = http.GET();
   Serial.printf("🎵 Audio GET response code: %d\n", httpCode);
