@@ -98,7 +98,8 @@ First, we need to give power to everything on our breadboard:
 7. Recommended settings:
    - Flash Size: 4MB
    - Upload Speed: 115200
-   - Erase Flash: "All Flash Contents" (only if needed)
+   - USB CDC On Boot: Enabled (This allows us to use serial monitor with usb-c)
+   - Erase Flash: "All Flash Contents"
 
 ---
 
@@ -108,10 +109,49 @@ First, we need to give power to everything on our breadboard:
 2. Click ✅ Upload in Arduino
 3. If upload fails, press and hold **BOOT** while clicking Upload
 
----
+--- 
 
 ## 🧪 Serial Monitor
 
 - Open `Tools > Serial Monitor`
 - Set **baud rate** to `115200`
 - Look for logs like:
+
+
+## Set up WiFi
+
+You can hardcode your Wi-Fi at the beginning of the arduino code. However, if you want to be able to use different wifis, you can also set up your wifi dynamically:
+
+Once your board is connected to a power source, you should see in your computer's wifi settings a new network appear: `ESP32-Robot-Setup`. Connect to it, and in the portal which appears, click "Configure WiFi" then add your WiFi settings.
+
+## Software (Advanced!!!)
+
+By default, the robot will connect to a source that I have set up (which should look like `https://robot-server-782703035576.europe-west1.run.app`). 
+However, you may want to change this, for example if you want to debug the server code on your own machine, or if you want to deploy your own version. 
+
+If so, change the `server_url` variable to your server.
+
+### Requirements
+
+You must have an AssemblyAI and an OpenAI developer keys. 
+
+###  To run the server locally:
+
+You must have python 3 installed locally. Within this repo:
+
+```
+cd server
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+If you are on Mac and don't yet have ffmpeg installed, install it:
+```
+brew install ffmpeg  # if not already installed (macOS)
+```
+
+Then start the server:
+```
+python proxy_server_audio.py
+```
