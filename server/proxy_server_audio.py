@@ -423,4 +423,6 @@ if __name__ == '__main__':
         print("   Windows: Download from https://ffmpeg.org/")
     
     port = int(os.environ.get('PORT', 5050))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    # Local runs use an adhoc self-signed cert so the ESP32's secureClient
+    # (TLS-only) can connect the same way it does to the deployed server.
+    app.run(host='0.0.0.0', port=port, debug=False, ssl_context='adhoc')

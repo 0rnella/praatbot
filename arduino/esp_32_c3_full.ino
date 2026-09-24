@@ -15,15 +15,7 @@ const char* WIFI_PASSWORD = "ornellaf"; // Replace with your WiFi password
 String server_url = "https://robot-server-782703035576.europe-west1.run.app";
 String upload_url = server_url + "/upload";
 
-WiFiClientSecure testClient;
-WiFiClient plainClient;
-bool useHttps = server_url.startsWith("https://");
-
-// Local Flask dev server only speaks plain HTTP, so pick the right client
-// based on the server_url scheme instead of always doing a TLS handshake.
-WiFiClient& getHttpClient() {
-  return useHttps ? (WiFiClient&)testClient : plainClient;
-}
+WiFiClientSecure wifiClient;
 
 // Pin definitions
 #define BUTTON_PIN 3
@@ -64,7 +56,7 @@ void setup() {
   Serial.println("🤖 AI Robot Starting Up!");
 
   // Initialize global SSL client
-  testClient.setInsecure();
+  wifiClient.setInsecure();
 
   // Try connecting to fixed WiFi credentials first
   connectToWiFi();
@@ -314,7 +306,7 @@ void sendAudioToServer(int actual_data_size) {
   // Test server connectivity first
   Serial.println("🔍 Testing server connectivity...");
   HTTPClient testHttp;
-  testHttp.begin(getHttpClient(), server_url + "/health");
+  testHttp.begin(wifiClient, server_url + "/health");
   testHttp.setTimeout(10000);
   
   int testResponse = testHttp.GET();
@@ -339,8 +331,8 @@ void sendAudioToServer(int actual_data_size) {
   http.setTimeout(40000);
   
   // Add debugging for the connection
-  Serial.println(useHttps ? "🔗 Attempting HTTPS connection..." : "🔗 Attempting HTTP connection...");
-  if (!http.begin(getHttpClient(), server_url + "/upload")) {
+  Serial.println("🔗 Attempting HTTPS connection...");
+  if (!http.begin(wifiClient, server_url + "/upload")) {
     Serial.println("❌ Failed to begin connection");
     return;
   }
@@ -471,7 +463,7 @@ void playAudioFromURL(String url) {
   
   HTTPClient http;
   
-  if (!http.begin(getHttpClient(), url)) {
+  if (!http.begin(wifiClient, url)) {
     Serial.println("❌ Failed to begin audio connection");
     return;
   }
@@ -485,7 +477,7 @@ void playAudioFromURL(String url) {
   // Add detailed error reporting for the audio request
   if (httpCode == -1) {
     Serial.println("❌ HTTP_ERROR_CONNECTION_REFUSED or timeout");
-    Serial.printf("🔍 Client connected: %s\n", testClient.connected() ? "Yes" : "No");
+    Serial.printf("🔍 Client connected: %s\n", wifiClient.connected() ? "Yes" : "No");
     Serial.printf("🔍 Free heap: %d bytes\n", ESP.getFreeHeap());
   } else if (httpCode == -11) {
     Serial.println("❌ HTTP_ERROR_READ_TIMEOUT");
