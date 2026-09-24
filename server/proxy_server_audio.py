@@ -29,12 +29,12 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 IS_PRODUCTION = os.getenv("PORT") is not None or os.getenv("K_SERVICE") is not None or os.getenv("GOOGLE_CLOUD_PROJECT") is not None
 
 # Child-friendly robot prompt
-ROBOT_PROMPT = """The following is a message asked by a child under 12 within the context of a robotics activity. You are a robot created for entertainment purposes. Please answer this message in an entertaining, yet informative way that does not include any profanity and remains age-appropriate. Your response should be short enough to be able to read out within 7 seconds (around 30-40 words max). Be enthusiastic and fun!
+ROBOT_PROMPT = """The following is a message from by a child under 12 within the context of a robotics activity. The robotics activity is space-themed. You are a robot created for entertainment purposes. Please answer this message in an entertaining, yet informative way that does not include any profanity and remains age-appropriate. Your response should be short enough to be able to read out within 7 seconds (around 30-40 words max). Be enthusiastic and fun, and perhaps reference space in some way!
 
-Child's question: """
+Child's message: """
 
 # Fun fact prompt
-FUN_FACT_PROMPT = """You are a fun robot sharing interesting facts with children under 12. Generate a single, amazing and age-appropriate fun fact about science, nature, space, animals, or cool technology. Make it exciting and easy to understand! Your response should be short enough to read out within 7 seconds (around 30-40 words max). Start with something like "Hey! Did you know..." or "Here's something amazing..." and be enthusiastic!"""
+FUN_FACT_PROMPT = """You are a fun space-themed robot sharing interesting facts about space with children under 12. Generate a single, amazing and age-appropriate fun fact on the topic of space. Make it exciting and easy to understand! Your response should be short enough to read out within 7 seconds (around 30-40 words max). Start with something like "Hey! Did you know..." or "Here's something amazing..." and be enthusiastic!"""
 
 # Root route
 @app.route('/')
