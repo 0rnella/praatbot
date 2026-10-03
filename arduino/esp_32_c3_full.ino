@@ -15,6 +15,12 @@ const char* WIFI_PASSWORD = "ornellaf"; // Replace with your WiFi password
 String server_url = "https://robot-server-782703035576.europe-west1.run.app";
 String upload_url = server_url + "/upload";
 
+// Display name this device identifies itself with on the server
+const char* DEVICE_NAME = "praatbot";
+
+// Stable per-board ID derived from the eFuse MAC (set once in setup())
+String DEVICE_ID;
+
 WiFiClientSecure wifiClient;
 
 // Pin definitions
@@ -54,6 +60,15 @@ void setup() {
   digitalWrite(LED_PIN, LOW);
 
   Serial.println("🤖 AI Robot Starting Up!");
+
+  // Derive a stable per-board ID from the eFuse MAC (burned in at the
+  // factory, survives reflashing) so the server can recognize this exact
+  // device across requests even though DEVICE_NAME is the same on every board.
+  uint64_t chipId = ESP.getEfuseMac();
+  char chipIdStr[13];
+  snprintf(chipIdStr, sizeof(chipIdStr), "%04X%08X", (uint16_t)(chipId >> 32), (uint32_t)chipId);
+  DEVICE_ID = String(chipIdStr);
+  Serial.printf("🆔 Device ID: %s\n", DEVICE_ID.c_str());
 
   // Initialize global SSL client
   wifiClient.setInsecure();
@@ -307,6 +322,8 @@ void sendAudioToServer(int actual_data_size) {
   Serial.println("🔍 Testing server connectivity...");
   HTTPClient testHttp;
   testHttp.begin(wifiClient, server_url + "/health");
+  testHttp.addHeader("X-Device-Name", DEVICE_NAME);
+  testHttp.addHeader("X-Device-Id", DEVICE_ID);
   testHttp.setTimeout(10000);
   
   int testResponse = testHttp.GET();
@@ -338,6 +355,8 @@ void sendAudioToServer(int actual_data_size) {
   }
 
   http.addHeader("Content-Type", "multipart/form-data; boundary=----WebKitFormBoundary");
+  http.addHeader("X-Device-Name", DEVICE_NAME);
+  http.addHeader("X-Device-Id", DEVICE_ID);
   Serial.println("✅ Connection established");
 
   String header = "------WebKitFormBoundary\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n";
@@ -525,17 +544,17 @@ void playAudioFromURL(String url) {
     size_t totalRead = 0;
     size_t totalPlayed = 0;
     unsigned long startTime = millis();
-    
+
     while (http.connected() && totalRead < dataSize) {
       // Read a small chunk
       size_t toRead = min((size_t)CHUNK_SIZE, (size_t)(dataSize - totalRead));
       size_t bytesRead = stream->readBytes(audioBuffer, toRead);
-      
+
       if (bytesRead == 0) {
         Serial.println("⚠️ No more data from stream");
         break;
       }
-      
+
       totalRead += bytesRead;
       
       // Try to play this chunk with very aggressive timeout management

@@ -2,12 +2,14 @@ from flask import Flask, request, jsonify, send_file
 import requests
 import time
 import os
-from datetime import datetime
+import uuid
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
-import random
-import io
+from google.cloud import firestore
+from google.cloud.firestore_v1.base_query import FieldFilter
 import logging
 import sys
+import subprocess
 
 # Load environment variables from .env file
 load_dotenv()
@@ -18,7 +20,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     stream=sys.stdout
 )
-logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -36,6 +37,75 @@ Child's message: """
 # Fun fact prompt
 FUN_FACT_PROMPT = """You are a fun space-themed robot sharing interesting facts about space with children under 12. Generate a single, amazing and age-appropriate fun fact on the topic of space. Make it exciting and easy to understand! Your response should be short enough to read out within 7 seconds (around 30-40 words max). Start with something like "Hey! Did you know..." or "Here's something amazing..." and be enthusiastic!"""
 
+# --- Firestore-backed device tracker -----------------------------------
+# Persists across scale-to-zero/redeploys, unlike local memory or disk.
+FIRESTORE_PROJECT_ID = "aha-robot"
+FIRESTORE_DATABASE = "praatbot"
+DEVICES_COLLECTION = "devices"
+
+DEVICE_TTL_SECONDS = 6 * 60 * 60
+MAX_DEVICES = 30
+
+firestore_db = firestore.Client(project=FIRESTORE_PROJECT_ID, database=FIRESTORE_DATABASE)
+
+# Routes that aren't actual device traffic and shouldn't register an entry.
+DEVICE_TRACKING_SKIP_ENDPOINTS = {'root', 'devices_endpoint', 'serve_audio'}
+
+
+def _prune_devices():
+    """Delete expired entries and enforce the max size."""
+    devices_ref = firestore_db.collection(DEVICES_COLLECTION)
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=DEVICE_TTL_SECONDS)
+
+    for doc in devices_ref.where(filter=FieldFilter('last_seen', '<', cutoff)).stream():
+        doc.reference.delete()
+
+    docs = list(devices_ref.order_by('last_seen', direction=firestore.Query.DESCENDING).stream())
+    for doc in docs[MAX_DEVICES:]:
+        doc.reference.delete()
+
+
+@app.before_request
+def track_device():
+    if request.endpoint in DEVICE_TRACKING_SKIP_ENDPOINTS:
+        return
+
+    # X-Device-Id is a stable per-board ID (derived from the ESP32's eFuse
+    # MAC - see the Arduino sketch), so repeat requests from the same board
+    # update the same entry. X-Device-Name is just a label and isn't unique
+    # (it's hardcoded the same on every board right now).
+    device_id = request.headers.get('X-Device-Id') or str(uuid.uuid4())
+    display_name = request.headers.get('X-Device-Name') or 'praatbot'
+    now = datetime.now(timezone.utc)
+
+    doc_ref = firestore_db.collection(DEVICES_COLLECTION).document(device_id)
+    if doc_ref.get().exists:
+        doc_ref.update({'last_seen': now, 'display_name': display_name})
+    else:
+        doc_ref.set({'display_name': display_name, 'first_seen': now, 'last_seen': now})
+
+    _prune_devices()
+
+
+@app.route('/devices', methods=['GET'])
+def devices_endpoint():
+    """View currently tracked devices (seen within the last 6 hours)."""
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=DEVICE_TTL_SECONDS)
+    docs = (firestore_db.collection(DEVICES_COLLECTION)
+            .where(filter=FieldFilter('last_seen', '>=', cutoff))
+            .order_by('last_seen', direction=firestore.Query.DESCENDING)
+            .stream())
+    result = [
+        {
+            'device_id': doc.id,
+            'display_name': doc.get('display_name'),
+            'first_seen': doc.get('first_seen').isoformat(),
+            'last_seen': doc.get('last_seen').isoformat(),
+        }
+        for doc in docs
+    ]
+    return jsonify({'count': len(result), 'devices': result})
+
 # Root route
 @app.route('/')
 def root():
@@ -45,7 +115,8 @@ def root():
             'health': '/health',
             'upload': '/upload',
             'fun-fact': '/fun-fact',
-            'audio': '/audio/<filename>'
+            'audio': '/audio/<filename>',
+            'devices': '/devices'
         }
     })
 
@@ -333,7 +404,6 @@ def text_to_speech(text, timestamp):
             final_filename = f"{audio_dir}/{timestamp}.wav"
             
             # Try to convert sample rate using ffmpeg
-            import subprocess
             try:
                 # Convert 24kHz to 16kHz using ffmpeg
                 cmd = [
@@ -412,7 +482,6 @@ if __name__ == '__main__':
     print("🎤 Ready to receive audio and respond with properly formatted speech!")
     
     # Check for ffmpeg
-    import subprocess
     try:
         subprocess.run(['ffmpeg', '-version'], capture_output=True)
         print("✅ FFmpeg found - audio conversion will work properly")

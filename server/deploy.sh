@@ -21,6 +21,7 @@ gcloud run deploy robot-server \
     --project aha-robot \
     --allow-unauthenticated \
     --platform managed \
+    --service-account robot-server@aha-robot.iam.gserviceaccount.com \
     --set-env-vars="ASSEMBLYAI_API_KEY=$ASSEMBLYAI_API_KEY,OPENAI_API_KEY=$OPENAI_API_KEY"
 
 echo "Deployment complete!"
