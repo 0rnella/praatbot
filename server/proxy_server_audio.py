@@ -1,12 +1,11 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, g
 import requests
 import time
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from google.cloud import firestore
-from google.cloud.firestore_v1.base_query import FieldFilter
 import logging
 import sys
 import subprocess
@@ -42,27 +41,12 @@ FUN_FACT_PROMPT = """You are a fun space-themed robot sharing interesting facts 
 FIRESTORE_PROJECT_ID = "aha-robot"
 FIRESTORE_DATABASE = "praatbot"
 DEVICES_COLLECTION = "devices"
-
-DEVICE_TTL_SECONDS = 6 * 60 * 60
-MAX_DEVICES = 30
+CONVERSATIONS_SUBCOLLECTION = "conversations"
 
 firestore_db = firestore.Client(project=FIRESTORE_PROJECT_ID, database=FIRESTORE_DATABASE)
 
 # Routes that aren't actual device traffic and shouldn't register an entry.
-DEVICE_TRACKING_SKIP_ENDPOINTS = {'root', 'devices_endpoint', 'serve_audio'}
-
-
-def _prune_devices():
-    """Delete expired entries and enforce the max size."""
-    devices_ref = firestore_db.collection(DEVICES_COLLECTION)
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=DEVICE_TTL_SECONDS)
-
-    for doc in devices_ref.where(filter=FieldFilter('last_seen', '<', cutoff)).stream():
-        doc.reference.delete()
-
-    docs = list(devices_ref.order_by('last_seen', direction=firestore.Query.DESCENDING).stream())
-    for doc in docs[MAX_DEVICES:]:
-        doc.reference.delete()
+DEVICE_TRACKING_SKIP_ENDPOINTS = {'root', 'devices_endpoint', 'device_conversations_endpoint', 'serve_audio'}
 
 
 @app.before_request
@@ -84,15 +68,24 @@ def track_device():
     else:
         doc_ref.set({'display_name': display_name, 'first_seen': now, 'last_seen': now})
 
-    _prune_devices()
+    g.device_id = device_id
+
+
+def save_conversation(device_id, user_text, ai_response, was_fun_fact=False):
+    """Log one Q&A exchange under the device's conversation history."""
+    (firestore_db.collection(DEVICES_COLLECTION).document(device_id)
+     .collection(CONVERSATIONS_SUBCOLLECTION).add({
+         'timestamp': datetime.now(timezone.utc),
+         'user_text': user_text,
+         'ai_response': ai_response,
+         'was_fun_fact': was_fun_fact,
+     }))
 
 
 @app.route('/devices', methods=['GET'])
 def devices_endpoint():
-    """View currently tracked devices (seen within the last 6 hours)."""
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=DEVICE_TTL_SECONDS)
+    """View all tracked devices."""
     docs = (firestore_db.collection(DEVICES_COLLECTION)
-            .where(filter=FieldFilter('last_seen', '>=', cutoff))
             .order_by('last_seen', direction=firestore.Query.DESCENDING)
             .stream())
     result = [
@@ -106,6 +99,26 @@ def devices_endpoint():
     ]
     return jsonify({'count': len(result), 'devices': result})
 
+
+@app.route('/devices/<device_id>/conversations', methods=['GET'])
+def device_conversations_endpoint(device_id):
+    """View a device's conversation history, most recent first."""
+    docs = (firestore_db.collection(DEVICES_COLLECTION).document(device_id)
+            .collection(CONVERSATIONS_SUBCOLLECTION)
+            .order_by('timestamp', direction=firestore.Query.DESCENDING)
+            .stream())
+    result = [
+        {
+            'conversation_id': doc.id,
+            'timestamp': doc.get('timestamp').isoformat(),
+            'user_text': doc.get('user_text'),
+            'ai_response': doc.get('ai_response'),
+            'was_fun_fact': doc.get('was_fun_fact'),
+        }
+        for doc in docs
+    ]
+    return jsonify({'count': len(result), 'conversations': result})
+
 # Root route
 @app.route('/')
 def root():
@@ -116,7 +129,8 @@ def root():
             'upload': '/upload',
             'fun-fact': '/fun-fact',
             'audio': '/audio/<filename>',
-            'devices': '/devices'
+            'devices': '/devices',
+            'device-conversations': '/devices/<device_id>/conversations'
         }
     })
 
@@ -191,22 +205,25 @@ def upload():
             if not transcript_text or transcript_text.strip() == "":
                 print("🎲 No speech detected - generating fun fact...")
                 fun_fact_response = generate_fun_fact(is_redirect=True)
+                save_conversation(g.device_id, transcript_text or "[No speech detected]",
+                                   fun_fact_response['text'], was_fun_fact=True)
                 return jsonify({
                     'text': transcript_text or "[No speech detected]",
                     'ai_response': fun_fact_response['text'],
                     'has_audio': fun_fact_response['has_audio'],
                     'audio_url': fun_fact_response.get('audio_url', '')
                 })
-            
+
             try:
                 print("🤖 Generating AI response...")
                 chat_response = get_ai_response(transcript_text)
                 print(f"🎭 AI Response: '{chat_response}'")
-                
+                save_conversation(g.device_id, transcript_text, chat_response)
+
                 # Step 5: Convert AI response to speech (FIXED SAMPLE RATE)
                 print("🔊 Converting to speech...")
                 audio_file_path = text_to_speech(chat_response, timestamp)
-                
+
                 if audio_file_path:
                     return jsonify({
                         'text': transcript_text,
@@ -220,12 +237,14 @@ def upload():
                         'ai_response': chat_response,
                         'has_audio': False
                     })
-                
+
             except Exception as e:
                 print(f"❌ AI Response Error: {e}")
+                fallback_response = "Oops! My robot brain is having trouble right now. Try asking me again!"
+                save_conversation(g.device_id, transcript_text, fallback_response)
                 return jsonify({
                     'text': transcript_text,
-                    'ai_response': "Oops! My robot brain is having trouble right now. Try asking me again!",
+                    'ai_response': fallback_response,
                     'has_audio': False
                 })
             
