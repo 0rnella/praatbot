@@ -46,12 +46,18 @@ CONVERSATIONS_SUBCOLLECTION = "conversations"
 firestore_db = firestore.Client(project=FIRESTORE_PROJECT_ID, database=FIRESTORE_DATABASE)
 
 # Routes that aren't actual device traffic and shouldn't register an entry.
-DEVICE_TRACKING_SKIP_ENDPOINTS = {'root', 'devices_endpoint', 'device_conversations_endpoint', 'serve_audio'}
+DEVICE_TRACKING_SKIP_ENDPOINTS = {
+    'root', 'devices_endpoint', 'device_conversations_endpoint', 'serve_audio',
+    'spaceboard', 'spaceboard_device', 'static',
+}
 
 
 @app.before_request
 def track_device():
-    if request.endpoint in DEVICE_TRACKING_SKIP_ENDPOINTS:
+    # request.endpoint is None for anything that didn't match a real route
+    # (404s like /favicon.ico, trailing-slash mismatches, wrong-method 405s)
+    # - none of that is real device traffic, so skip it too.
+    if request.endpoint is None or request.endpoint in DEVICE_TRACKING_SKIP_ENDPOINTS:
         return
 
     # X-Device-Id is a stable per-board ID (derived from the ESP32's eFuse
@@ -119,6 +125,18 @@ def device_conversations_endpoint(device_id):
     ]
     return jsonify({'count': len(result), 'conversations': result})
 
+
+@app.route('/spaceboard')
+def spaceboard():
+    """Mission control UI: grid of connected devices."""
+    return app.send_static_file('spaceboard.html')
+
+
+@app.route('/spaceboard/<device_id>')
+def spaceboard_device(device_id):
+    """Mission control UI: one device's conversation history."""
+    return app.send_static_file('spaceboard_device.html')
+
 # Root route
 @app.route('/')
 def root():
@@ -130,7 +148,9 @@ def root():
             'fun-fact': '/fun-fact',
             'audio': '/audio/<filename>',
             'devices': '/devices',
-            'device-conversations': '/devices/<device_id>/conversations'
+            'device-conversations': '/devices/<device_id>/conversations',
+            'spaceboard': '/spaceboard',
+            'spaceboard-device': '/spaceboard/<device_id>'
         }
     })
 

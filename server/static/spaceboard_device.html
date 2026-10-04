@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Praatbot Flight Log</title>
+<link rel="stylesheet" href="/static/spaceboard.css">
+</head>
+<body>
+
+<header>
+  <h1 id="page-title">🚀 Flight Log</h1>
+  <p id="conversation-subtitle"></p>
+</header>
+
+<div class="back-row">
+  <a class="btn" href="/spaceboard">← Back to Mission Control</a>
+</div>
+
+<div id="conversation-view">
+  <div id="empty-state" class="hidden">No conversations yet - ask this bot something!</div>
+  <div id="conversation-list"></div>
+</div>
+
+<script src="/static/spaceboard-common.js"></script>
+<script>
+  const deviceId = decodeURIComponent(window.location.pathname.split('/').pop());
+  const pageTitle = document.getElementById('page-title');
+  const subtitle = document.getElementById('conversation-subtitle');
+  const conversationList = document.getElementById('conversation-list');
+  const emptyState = document.getElementById('empty-state');
+
+  async function loadConversations() {
+    const [devicesRes, conversationsRes] = await Promise.all([
+      fetch('/devices'),
+      fetch(`/devices/${encodeURIComponent(deviceId)}/conversations`),
+    ]);
+    const devicesData = await devicesRes.json();
+    const conversationsData = await conversationsRes.json();
+
+    const device = devicesData.devices.find(d => d.device_id === deviceId);
+    pageTitle.textContent = `🚀 ${device ? device.display_name : deviceId}'s Flight Log`;
+    subtitle.textContent = conversationsData.conversations.length
+      ? `${conversationsData.conversations.length} conversation${conversationsData.conversations.length === 1 ? '' : 's'}`
+      : '';
+
+    conversationList.innerHTML = '';
+    if (conversationsData.conversations.length === 0) {
+      emptyState.classList.remove('hidden');
+      return;
+    }
+    emptyState.classList.add('hidden');
+
+    for (const convo of conversationsData.conversations) {
+      const card = document.createElement('div');
+      card.className = 'exchange';
+
+      const time = document.createElement('div');
+      time.className = 'exchange-time';
+      time.textContent = formatTimestamp(convo.timestamp);
+      card.appendChild(time);
+
+      const kidLine = document.createElement('p');
+      kidLine.className = 'exchange-line';
+      kidLine.innerHTML = `<span class="who">Explorer:</span> ${convo.was_fun_fact ? '🔇 (no speech detected)' : escapeHtml(convo.user_text)}`;
+      card.appendChild(kidLine);
+
+      const botLine = document.createElement('p');
+      botLine.className = 'exchange-line';
+      botLine.innerHTML = `<span class="who">Robot:</span> ${escapeHtml(convo.ai_response)}`;
+      card.appendChild(botLine);
+
+      conversationList.appendChild(card);
+    }
+  }
+
+  loadConversations();
+</script>
+
+</body>
+</html>
