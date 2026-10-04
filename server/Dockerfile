@@ -11,6 +11,7 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY proxy_server_audio.py .
+COPY static/ static/
 
 # Create tmp directory that the app uses
 RUN mkdir -p /tmp

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Praatbot Mission Control</title>
+<link rel="stylesheet" href="/static/spaceboard.css">
+</head>
+<body>
+
+<header>
+  <h1>🚀 Praatbot Mission Control</h1>
+  <p>Every bot that's checked in - click one to see its flight log</p>
+</header>
+
+<div id="toolbar">
+  <button class="btn" id="refresh-btn">↻ Refresh</button>
+</div>
+
+<div id="empty-state" class="hidden">No rockets have launched yet. Power on a praatbot to see it here!</div>
+<div id="device-grid"></div>
+
+<template id="rocket-template">
+  <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M32 4C40 12 44 24 44 36C44 42 38 47 32 50C26 47 20 42 20 36C20 24 24 12 32 4Z" fill="#e8ecf7"/>
+    <path d="M32 4C36 12 38 24 38 36C38 42 35 47 32 50C29 47 26 42 26 36C26 24 28 12 32 4Z" fill="#c7cdea"/>
+    <circle cx="32" cy="26" r="5" fill="#2c2a5a"/>
+    <path d="M20 34L10 46L20 44Z" fill="#ff5a5a"/>
+    <path d="M44 34L54 46L44 44Z" fill="#ff5a5a"/>
+    <path d="M27 48C27 48 24 56 24 60C27 58 29 56 32 56C35 56 37 58 40 60C40 56 37 48 37 48Z" fill="#ffb020"/>
+  </svg>
+</template>
+
+<script src="/static/spaceboard-common.js"></script>
+<script>
+  const deviceGrid = document.getElementById('device-grid');
+  const emptyState = document.getElementById('empty-state');
+  const rocketTemplate = document.getElementById('rocket-template');
+
+  async function loadDevices() {
+    const res = await fetch('/devices');
+    const data = await res.json();
+    deviceGrid.innerHTML = '';
+
+    if (data.devices.length === 0) {
+      emptyState.classList.remove('hidden');
+      return;
+    }
+    emptyState.classList.add('hidden');
+
+    for (const device of data.devices) {
+      const card = document.createElement('a');
+      card.className = 'device-card';
+      card.href = `/spaceboard/${encodeURIComponent(device.device_id)}`;
+      card.appendChild(rocketTemplate.content.cloneNode(true));
+
+      const name = document.createElement('div');
+      name.className = 'device-name';
+      name.textContent = device.display_name;
+      card.appendChild(name);
+
+      const lastSeen = document.createElement('div');
+      lastSeen.className = 'device-last-seen';
+      lastSeen.textContent = `seen ${timeAgo(device.last_seen)}`;
+      card.appendChild(lastSeen);
+
+      deviceGrid.appendChild(card);
+    }
+  }
+
+  document.getElementById('refresh-btn').addEventListener('click', loadDevices);
+
+  loadDevices();
+</script>
+
+</body>
+</html>

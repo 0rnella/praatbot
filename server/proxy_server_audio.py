@@ -1,13 +1,14 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, g
 import requests
 import time
 import os
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
 from dotenv import load_dotenv
-import random
-import io
+from google.cloud import firestore
 import logging
 import sys
+import subprocess
 
 # Load environment variables from .env file
 load_dotenv()
@@ -18,7 +19,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     stream=sys.stdout
 )
-logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -36,6 +36,107 @@ Child's message: """
 # Fun fact prompt
 FUN_FACT_PROMPT = """You are a fun space-themed robot sharing interesting facts about space with children under 12. Generate a single, amazing and age-appropriate fun fact on the topic of space. Make it exciting and easy to understand! Your response should be short enough to read out within 7 seconds (around 30-40 words max). Start with something like "Hey! Did you know..." or "Here's something amazing..." and be enthusiastic!"""
 
+# --- Firestore-backed device tracker -----------------------------------
+# Persists across scale-to-zero/redeploys, unlike local memory or disk.
+FIRESTORE_PROJECT_ID = "aha-robot"
+FIRESTORE_DATABASE = "praatbot"
+DEVICES_COLLECTION = "devices"
+CONVERSATIONS_SUBCOLLECTION = "conversations"
+
+firestore_db = firestore.Client(project=FIRESTORE_PROJECT_ID, database=FIRESTORE_DATABASE)
+
+# Routes that aren't actual device traffic and shouldn't register an entry.
+DEVICE_TRACKING_SKIP_ENDPOINTS = {
+    'root', 'devices_endpoint', 'device_conversations_endpoint', 'serve_audio',
+    'spaceboard', 'spaceboard_device', 'static',
+}
+
+
+@app.before_request
+def track_device():
+    # request.endpoint is None for anything that didn't match a real route
+    # (404s like /favicon.ico, trailing-slash mismatches, wrong-method 405s)
+    # - none of that is real device traffic, so skip it too.
+    if request.endpoint is None or request.endpoint in DEVICE_TRACKING_SKIP_ENDPOINTS:
+        return
+
+    # X-Device-Id is a stable per-board ID (derived from the ESP32's eFuse
+    # MAC - see the Arduino sketch), so repeat requests from the same board
+    # update the same entry. X-Device-Name is just a label and isn't unique
+    # (it's hardcoded the same on every board right now).
+    device_id = request.headers.get('X-Device-Id') or str(uuid.uuid4())
+    display_name = request.headers.get('X-Device-Name') or 'praatbot'
+    now = datetime.now(timezone.utc)
+
+    doc_ref = firestore_db.collection(DEVICES_COLLECTION).document(device_id)
+    if doc_ref.get().exists:
+        doc_ref.update({'last_seen': now, 'display_name': display_name})
+    else:
+        doc_ref.set({'display_name': display_name, 'first_seen': now, 'last_seen': now})
+
+    g.device_id = device_id
+
+
+def save_conversation(device_id, user_text, ai_response, was_fun_fact=False):
+    """Log one Q&A exchange under the device's conversation history."""
+    (firestore_db.collection(DEVICES_COLLECTION).document(device_id)
+     .collection(CONVERSATIONS_SUBCOLLECTION).add({
+         'timestamp': datetime.now(timezone.utc),
+         'user_text': user_text,
+         'ai_response': ai_response,
+         'was_fun_fact': was_fun_fact,
+     }))
+
+
+@app.route('/devices', methods=['GET'])
+def devices_endpoint():
+    """View all tracked devices."""
+    docs = (firestore_db.collection(DEVICES_COLLECTION)
+            .order_by('last_seen', direction=firestore.Query.DESCENDING)
+            .stream())
+    result = [
+        {
+            'device_id': doc.id,
+            'display_name': doc.get('display_name'),
+            'first_seen': doc.get('first_seen').isoformat(),
+            'last_seen': doc.get('last_seen').isoformat(),
+        }
+        for doc in docs
+    ]
+    return jsonify({'count': len(result), 'devices': result})
+
+
+@app.route('/devices/<device_id>/conversations', methods=['GET'])
+def device_conversations_endpoint(device_id):
+    """View a device's conversation history, most recent first."""
+    docs = (firestore_db.collection(DEVICES_COLLECTION).document(device_id)
+            .collection(CONVERSATIONS_SUBCOLLECTION)
+            .order_by('timestamp', direction=firestore.Query.DESCENDING)
+            .stream())
+    result = [
+        {
+            'conversation_id': doc.id,
+            'timestamp': doc.get('timestamp').isoformat(),
+            'user_text': doc.get('user_text'),
+            'ai_response': doc.get('ai_response'),
+            'was_fun_fact': doc.get('was_fun_fact'),
+        }
+        for doc in docs
+    ]
+    return jsonify({'count': len(result), 'conversations': result})
+
+
+@app.route('/spaceboard')
+def spaceboard():
+    """Mission control UI: grid of connected devices."""
+    return app.send_static_file('spaceboard.html')
+
+
+@app.route('/spaceboard/<device_id>')
+def spaceboard_device(device_id):
+    """Mission control UI: one device's conversation history."""
+    return app.send_static_file('spaceboard_device.html')
+
 # Root route
 @app.route('/')
 def root():
@@ -45,7 +146,11 @@ def root():
             'health': '/health',
             'upload': '/upload',
             'fun-fact': '/fun-fact',
-            'audio': '/audio/<filename>'
+            'audio': '/audio/<filename>',
+            'devices': '/devices',
+            'device-conversations': '/devices/<device_id>/conversations',
+            'spaceboard': '/spaceboard',
+            'spaceboard-device': '/spaceboard/<device_id>'
         }
     })
 
@@ -120,22 +225,25 @@ def upload():
             if not transcript_text or transcript_text.strip() == "":
                 print("🎲 No speech detected - generating fun fact...")
                 fun_fact_response = generate_fun_fact(is_redirect=True)
+                save_conversation(g.device_id, transcript_text or "[No speech detected]",
+                                   fun_fact_response['text'], was_fun_fact=True)
                 return jsonify({
                     'text': transcript_text or "[No speech detected]",
                     'ai_response': fun_fact_response['text'],
                     'has_audio': fun_fact_response['has_audio'],
                     'audio_url': fun_fact_response.get('audio_url', '')
                 })
-            
+
             try:
                 print("🤖 Generating AI response...")
                 chat_response = get_ai_response(transcript_text)
                 print(f"🎭 AI Response: '{chat_response}'")
-                
+                save_conversation(g.device_id, transcript_text, chat_response)
+
                 # Step 5: Convert AI response to speech (FIXED SAMPLE RATE)
                 print("🔊 Converting to speech...")
                 audio_file_path = text_to_speech(chat_response, timestamp)
-                
+
                 if audio_file_path:
                     return jsonify({
                         'text': transcript_text,
@@ -149,12 +257,14 @@ def upload():
                         'ai_response': chat_response,
                         'has_audio': False
                     })
-                
+
             except Exception as e:
                 print(f"❌ AI Response Error: {e}")
+                fallback_response = "Oops! My robot brain is having trouble right now. Try asking me again!"
+                save_conversation(g.device_id, transcript_text, fallback_response)
                 return jsonify({
                     'text': transcript_text,
-                    'ai_response': "Oops! My robot brain is having trouble right now. Try asking me again!",
+                    'ai_response': fallback_response,
                     'has_audio': False
                 })
             
@@ -333,7 +443,6 @@ def text_to_speech(text, timestamp):
             final_filename = f"{audio_dir}/{timestamp}.wav"
             
             # Try to convert sample rate using ffmpeg
-            import subprocess
             try:
                 # Convert 24kHz to 16kHz using ffmpeg
                 cmd = [
@@ -412,7 +521,6 @@ if __name__ == '__main__':
     print("🎤 Ready to receive audio and respond with properly formatted speech!")
     
     # Check for ffmpeg
-    import subprocess
     try:
         subprocess.run(['ffmpeg', '-version'], capture_output=True)
         print("✅ FFmpeg found - audio conversion will work properly")

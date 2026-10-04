@@ -4,3 +4,4 @@ server/audio_responses/*
 server/myrobot-env/*
 .env
 .DS_Store
+__pycache__/

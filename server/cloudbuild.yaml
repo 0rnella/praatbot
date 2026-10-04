@@ -17,6 +17,8 @@ steps:
     - '--region'
     - 'europe-west1'
     - '--allow-unauthenticated'
+    - '--service-account'
+    - 'robot-server@aha-robot.iam.gserviceaccount.com'
     - '--set-env-vars'
     - 'ASSEMBLYAI_API_KEY=$$ASSEMBLYAI_API_KEY,OPENAI_API_KEY=$$OPENAI_API_KEY'
     secretEnv: ['ASSEMBLYAI_API_KEY', 'OPENAI_API_KEY']
